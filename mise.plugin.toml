@@ -1,0 +1,7 @@
+# Package plugin manifest. `requires` lists host binaries the hooks shell out
+# to (mise will not install them); `supports_version_pins` is on because the
+# VS Code CLI accepts `--install-extension <id>@<version>`.
+[package-manager]
+requires = ["code"]
+supports_version_pins = true
+os = ["macos", "linux"]
