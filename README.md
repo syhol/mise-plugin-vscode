@@ -4,6 +4,11 @@ A [mise package plugin](https://mise.jdx.dev/package-plugin-development.html)
 that manages VS Code extensions from `[bootstrap.packages]`, the same way mise
 manages Homebrew formulae and casks.
 
+> **Note:** this is a 100% vibecoded project — every line of it was written by
+> an AI agent. It is also in active daily use: it manages the extensions in my
+> own [dotfiles](https://github.com/syhol/dotfiles), so it gets fixed when it
+> breaks. Read it before you trust it with yours.
+
 ```toml
 [settings]
 experimental = true # [bootstrap.*] is experimental
