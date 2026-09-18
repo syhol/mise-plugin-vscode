@@ -10,9 +10,6 @@ manages Homebrew formulae and casks.
 > breaks. Read it before you trust it with yours.
 
 ```toml
-[settings]
-experimental = true # [bootstrap.*] is experimental
-
 [bootstrap.packages]
 "vscode:biomejs.biome" = "latest"
 "vscode:catppuccin.catppuccin-vsc" = "3.19.0" # pinned

@@ -33,9 +33,9 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; exit 1; }
 
 write_config() { # write_config <version-or-empty>
   if [ -n "${1:-}" ]; then
-    printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n"vscode:%s" = "%s"\n' "$EXT" "$1" >"$WORK_DIR/mise.toml"
+    printf '[bootstrap.packages]\n"vscode:%s" = "%s"\n' "$EXT" "$1" >"$WORK_DIR/mise.toml"
   else
-    printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n' >"$WORK_DIR/mise.toml"
+    printf '[bootstrap.packages]\n' >"$WORK_DIR/mise.toml"
   fi
   mise trust --quiet "$WORK_DIR/mise.toml" >/dev/null
 }
@@ -99,7 +99,7 @@ mise -C "$WORK_DIR" bootstrap packages prune -m vscode -y >/dev/null
 pass "prune"
 
 echo "==> a bad id in the batch does not stop the good ones"
-printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n"vscode:%s" = "latest"\n"vscode:this.definitely-does-not-exist" = "latest"\n' "$EXT" >"$WORK_DIR/mise.toml"
+printf '[bootstrap.packages]\n"vscode:%s" = "latest"\n"vscode:this.definitely-does-not-exist" = "latest"\n' "$EXT" >"$WORK_DIR/mise.toml"
 mise trust --quiet "$WORK_DIR/mise.toml" >/dev/null
 mise -C "$WORK_DIR" bootstrap packages apply -y >/dev/null 2>&1 && fail "expected the bad id to fail the run"
 "${MISE_VSCODE_CLI:-code}" --extensions-dir "$MISE_VSCODE_EXTENSIONS_DIR" --list-extensions | grep -qi "$EXT" || fail "the good extension was skipped"
@@ -124,7 +124,7 @@ esac
 exit 0
 STUB_EOF
 chmod +x "$STUB"
-printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n"vscode:some.extension" = "latest"\n' >"$WORK_DIR/mise.toml"
+printf '[bootstrap.packages]\n"vscode:some.extension" = "latest"\n' >"$WORK_DIR/mise.toml"
 mise trust --quiet "$WORK_DIR/mise.toml" >/dev/null
 RETRY_STATE="$WORK_DIR/attempts" MISE_VSCODE_CLI="$STUB" \
   mise -C "$WORK_DIR" bootstrap packages apply -y >/dev/null 2>&1 || fail "retries did not recover from a 503"
