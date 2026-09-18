@@ -9,22 +9,18 @@ manages Homebrew formulae and casks.
 > own [dotfiles](https://github.com/syhol/dotfiles), so it gets fixed when it
 > breaks. Read it before you trust it with yours.
 
-```toml
-[bootstrap.packages]
-"vscode:biomejs.biome" = "latest"
-"vscode:catppuccin.catppuccin-vsc" = "3.19.0" # pinned
-```
-
-```sh
-mise bootstrap packages status   # what's installed / missing
-mise bootstrap packages apply    # install the missing ones
-mise bootstrap packages prune -m vscode  # remove the undeclared ones
-```
-
 ## Install
 
+Install the plugin, or declare it and let `mise bootstrap` install it:
+
 ```sh
-mise plugins install vscode https://github.com/syhol/mise-plugin-vscode
+mise plugins install package:vscode https://github.com/syhol/mise-plugin-vscode.git
+```
+
+```toml
+# mise.toml — installed in bootstrap's plugin phase, before the packages it manages
+[bootstrap.plugins]
+vscode = "https://github.com/syhol/mise-plugin-vscode.git"
 ```
 
 For local development, link a checkout instead — edits take effect with no
@@ -37,6 +33,54 @@ mise plugins link vscode ~/Code/syhol/mise-plugin-vscode
 Everything runs through the VS Code CLI (`code`), which the plugin declares in
 `requires`; mise will not install it for you. If `code` is not on `PATH`, run
 *Shell Command: Install 'code' command in PATH* from VS Code's command palette.
+
+## Managing extensions
+
+There are two ways to drive this, and they meet in the middle: the commands
+write the same `[bootstrap.packages]` entries you would write by hand.
+
+### Declarative — write the config, then apply
+
+```toml
+[bootstrap.packages]
+"vscode:biomejs.biome" = "latest"
+"vscode:catppuccin.catppuccin-vsc" = "3.19.0" # pinned
+```
+
+```sh
+mise bootstrap packages status           # what's installed / missing
+mise bootstrap packages apply            # install whatever is missing
+mise bootstrap packages apply --dry-run  # print the `code` command instead
+```
+
+This is the form to keep in a dotfiles repo: it survives a rebuild, and a
+comment next to an entry explains why it is there.
+
+### Imperative — one command adds it and installs it
+
+```sh
+mise bootstrap packages use -g vscode:biomejs.biome                     # add + install
+mise bootstrap packages use -g vscode:catppuccin.catppuccin-vsc@3.19.0  # pinned
+mise bootstrap packages use -g vscode:esbenp.prettier-vscode vscode:dbaeumer.vscode-eslint
+mise bootstrap packages prune -m vscode                                 # drop undeclared ones
+```
+
+`use` writes the entry into mise.toml (`-g` for the global config, otherwise the
+nearest project one) and then installs it, so nothing drifts out of config.
+
+To adopt a machine's existing extensions in one go:
+
+```sh
+mise bootstrap packages use -g $(code --list-extensions | sed 's/^/vscode:/')
+```
+
+Or, if you are migrating a plain list of ids (one per line, `#` comments) into
+config by hand:
+
+```sh
+grep -v '^\s*#' extensions.txt | grep -v '^\s*$' \
+  | sed 's/.*/"vscode:&" = "latest"/'
+```
 
 ## Configuration
 
@@ -79,21 +123,6 @@ Two environment variables change what gets driven:
   any trusted config it tracks — which includes configs in other projects.
 - **A removed extension folder can linger.** The CLI drops the extension from
   its registry immediately and deletes the directory on the next VS Code start.
-
-## Migrating a list of extensions
-
-To turn a plain list of ids (one per line, `#` comments) into config entries:
-
-```sh
-grep -v '^\s*#' extensions.txt | grep -v '^\s*$' \
-  | sed 's/.*/"vscode:&" = "latest"/'
-```
-
-To capture what you have installed right now:
-
-```sh
-code --list-extensions | sed 's/.*/"vscode:&" = "latest"/'
-```
 
 ## Layout
 
