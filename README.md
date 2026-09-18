@@ -113,10 +113,10 @@ Two environment variables change what gets driven:
   exactly what failed and why.
 - **Marketplace blips are retried.** A 503/timeout/reset is retried up to three
   times, a few seconds apart, before it counts as a failure.
-- **Unpinned extensions are never upgraded by mise.** A package plugin can only
-  report `installed` or `missing`, so mise sees an unpinned extension as
-  satisfied and `mise bootstrap packages upgrade` leaves it alone. VS Code
-  auto-updates extensions itself; pin a version if you want mise to decide.
+- **`upgrade` covers everything declared.** `mise bootstrap packages upgrade`
+  reinstalls each declared extension with `--force`: an unpinned one moves to
+  the newest marketplace build, a pinned one is re-asserted at its pin. Only
+  `apply` is conservative — it touches nothing that already satisfies its entry.
 - **Extensions you installed by hand are safe from `prune`.** mise only claims
   ownership of what it installed, `prune` defaults to Homebrew (`-m
   vscode` scopes it here), and it keeps anything still declared in
