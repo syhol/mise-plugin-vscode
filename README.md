@@ -59,6 +59,14 @@ Two environment variables change what gets driven:
   `code --install-extension <id>[@<version>] --force`. Without `--force` the CLI
   refuses to touch an already-installed extension, and `--force` also keeps it
   non-interactive, which the plugin contract requires.
+- **A batch is one `code` invocation**, not one per extension — 50 extensions
+  start the CLI once.
+- **One bad extension doesn't sink the batch.** The CLI stops at its first
+  failure and won't say which extension failed, so a failed batch is replayed
+  one extension at a time: the good ones still install, and the error names
+  exactly what failed and why.
+- **Marketplace blips are retried.** A 503/timeout/reset is retried up to three
+  times, a few seconds apart, before it counts as a failure.
 - **Unpinned extensions are never upgraded by mise.** A package plugin can only
   report `installed` or `missing`, so mise sees an unpinned extension as
   satisfied and `mise bootstrap packages upgrade` leaves it alone. VS Code
@@ -101,9 +109,9 @@ test/test.sh                  end-to-end test
 ## Tests
 
 `test/test.sh` runs the whole lifecycle — missing → dry run → install → pin →
-prune — against a temporary extensions directory and a temporary mise config,
-so it never touches your real VS Code profile or your real packages. It needs
-`code`, `mise`, and network access.
+prune, plus partial-failure and retry handling — against a temporary extensions
+directory, mise config and state dir, so it never touches your real VS Code
+profile or your real packages. It needs `code`, `mise`, and network access.
 
 ```sh
 ./test/test.sh                        # defaults to mikestead.dotenv

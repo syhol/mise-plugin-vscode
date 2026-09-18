@@ -20,7 +20,11 @@ mkdir -p "$MISE_VSCODE_EXTENSIONS_DIR"
 # (and `prune` isn't held back by the extension being declared somewhere else).
 export MISE_CONFIG_DIR="$WORK_DIR/config"
 export MISE_GLOBAL_CONFIG_FILE="$WORK_DIR/config/config.toml"
-mkdir -p "$MISE_CONFIG_DIR"
+# A private state dir keeps this run's package ownership and tracked configs to
+# itself: `prune` holds on to anything another trusted config still declares,
+# so a stray config elsewhere would otherwise make the prune case fail.
+export MISE_STATE_DIR="$WORK_DIR/state"
+mkdir -p "$MISE_CONFIG_DIR" "$MISE_STATE_DIR"
 : >"$MISE_GLOBAL_CONFIG_FILE"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -93,5 +97,38 @@ mise -C "$WORK_DIR" bootstrap packages prune -m vscode --dry-run 2>&1 | grep -q 
 mise -C "$WORK_DIR" bootstrap packages prune -m vscode -y >/dev/null
 "${MISE_VSCODE_CLI:-code}" --extensions-dir "$MISE_VSCODE_EXTENSIONS_DIR" --list-extensions | grep -qi "$EXT" && fail "prune did not remove it"
 pass "prune"
+
+echo "==> a bad id in the batch does not stop the good ones"
+printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n"vscode:%s" = "latest"\n"vscode:this.definitely-does-not-exist" = "latest"\n' "$EXT" >"$WORK_DIR/mise.toml"
+mise trust --quiet "$WORK_DIR/mise.toml" >/dev/null
+mise -C "$WORK_DIR" bootstrap packages apply -y >/dev/null 2>&1 && fail "expected the bad id to fail the run"
+"${MISE_VSCODE_CLI:-code}" --extensions-dir "$MISE_VSCODE_EXTENSIONS_DIR" --list-extensions | grep -qi "$EXT" || fail "the good extension was skipped"
+pass "partial failure"
+
+echo "==> a transient marketplace error is retried"
+STUB="$WORK_DIR/flaky-code"
+cat >"$STUB" <<'STUB_EOF'
+#!/usr/bin/env bash
+# Fails with a 503 on the first two install attempts, then succeeds.
+case " $* " in
+  *--install-extension*)
+    n=$(cat "$RETRY_STATE" 2>/dev/null || echo 0)
+    n=$((n + 1)); echo "$n" >"$RETRY_STATE"
+    if [ "$n" -le 2 ]; then
+      echo "(node:1) [DEP0169] DeprecationWarning: noise" >&2
+      echo "Error while installing extensions: Server returned 503" >&2
+      exit 1
+    fi
+    exit 0 ;;
+esac
+exit 0
+STUB_EOF
+chmod +x "$STUB"
+printf '[settings]\nexperimental = true\n\n[bootstrap.packages]\n"vscode:some.extension" = "latest"\n' >"$WORK_DIR/mise.toml"
+mise trust --quiet "$WORK_DIR/mise.toml" >/dev/null
+RETRY_STATE="$WORK_DIR/attempts" MISE_VSCODE_CLI="$STUB" \
+  mise -C "$WORK_DIR" bootstrap packages apply -y >/dev/null 2>&1 || fail "retries did not recover from a 503"
+[ "$(cat "$WORK_DIR/attempts")" = "3" ] || fail "expected 3 attempts, got $(cat "$WORK_DIR/attempts")"
+pass "transient retry"
 
 echo "all tests passed"

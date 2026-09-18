@@ -4,8 +4,6 @@
 local vscode = require("vscode")
 
 function PLUGIN:PackageUpgrade(ctx)
-  for _, pkg in ipairs(ctx.packages or {}) do
-    vscode.install(pkg, { dry_run = ctx.dry_run })
-  end
+  vscode.install(ctx.packages or {}, { dry_run = ctx.dry_run })
   return {}
 end

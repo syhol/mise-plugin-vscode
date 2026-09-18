@@ -9,6 +9,26 @@ local strings = require("strings")
 
 local M = {}
 
+-- Marketplace hiccups (503s, resets, timeouts) are common enough that a whole
+-- bootstrap should not fall over for one of them.
+local MAX_ATTEMPTS = 3
+local RETRY_DELAY_SECONDS = 3
+local TRANSIENT_MARKERS = {
+  "Server returned 429",
+  "Server returned 500",
+  "Server returned 502",
+  "Server returned 503",
+  "Server returned 504",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "socket hang up",
+  "network",
+  "timed out",
+  "Failed to fetch",
+}
+
 -- The CLI to drive. Override to manage a VS Code fork's extensions instead:
 --   MISE_VSCODE_CLI=cursor   (or code-insiders, codium, windsurf, ...)
 function M.cli()
@@ -45,22 +65,95 @@ function M.base_command()
   return base
 end
 
--- Run a CLI invocation, turning the raw Lua error into something actionable.
-local function exec(args)
-  local command = M.base_command() .. " " .. args
-  local ok, output = pcall(cmd.exec, command)
-  if not ok then
-    local detail = tostring(output)
-    if strings.contains(detail, "not found") then
-      error(
-        "VS Code CLI '" .. M.cli() .. "' not found on PATH. Install the "
-          .. "`code` command (VS Code: Shell Command: Install 'code' command in PATH) "
-          .. "or set MISE_VSCODE_CLI to another editor's CLI."
-      )
+-- A raw failure carries three kinds of noise around the one line that matters:
+-- Lua's own traceback, the cmd.exec status prefix, and the node deprecation
+-- warnings the CLI prints to stderr. Strip all three.
+local function tidy(detail)
+  local kept = {}
+  for _, line in ipairs(strings.split(tostring(detail), "\n")) do
+    local trimmed = strings.trim_space(line)
+    if strings.has_prefix(trimmed, "stack traceback:") then
+      break
     end
-    error("`" .. command .. "` failed: " .. detail)
+    trimmed = trimmed:gsub("^Command failed with status exit status: %d+:%s*", "")
+    trimmed = strings.trim_space(trimmed)
+    if
+      trimmed ~= ""
+      and not strings.contains(trimmed, "DeprecationWarning")
+      and not strings.contains(trimmed, "trace-deprecation")
+      and not strings.has_prefix(trimmed, "(node:")
+      and not strings.has_prefix(trimmed, "(Use `")
+      and not strings.has_prefix(trimmed, "Installing extensions")
+    then
+      table.insert(kept, trimmed)
+    end
   end
-  return output or ""
+  if #kept == 0 then
+    return strings.trim_space(tostring(detail))
+  end
+  return strings.join(kept, "; ")
+end
+
+local function is_transient(detail)
+  for _, marker in ipairs(TRANSIENT_MARKERS) do
+    if strings.contains(detail, marker) then
+      return true
+    end
+  end
+  return false
+end
+
+-- Run a CLI invocation; returns ok, output-or-tidied-error.
+local function try_exec(args)
+  local ok, output = pcall(cmd.exec, M.base_command() .. " " .. args)
+  if ok then
+    return true, output or ""
+  end
+  local detail = tostring(output)
+  -- 127 from `sh` means the CLI itself is missing. Match that, not the CLI's
+  -- own "Extension '…' not found." message for a bad extension id.
+  if strings.contains(detail, "exit status: 127") or strings.contains(detail, "command not found") then
+    return false,
+      "VS Code CLI '"
+        .. M.cli()
+        .. "' not found on PATH. Install the `code` command (VS Code: Shell "
+        .. "Command: Install 'code' command in PATH) or set MISE_VSCODE_CLI to "
+        .. "another editor's CLI."
+  end
+  return false, tidy(detail)
+end
+
+-- Same, but retrying while the failure looks like a marketplace/network blip.
+local function try_exec_with_retries(args)
+  local ok, detail
+  for attempt = 1, MAX_ATTEMPTS do
+    ok, detail = try_exec(args)
+    if ok or not is_transient(detail) then
+      return ok, detail
+    end
+    if attempt < MAX_ATTEMPTS then
+      print(
+        "transient failure (attempt "
+          .. attempt
+          .. "/"
+          .. MAX_ATTEMPTS
+          .. "), retrying in "
+          .. RETRY_DELAY_SECONDS
+          .. "s: "
+          .. detail
+      )
+      pcall(cmd.exec, "sleep " .. RETRY_DELAY_SECONDS)
+    end
+  end
+  return ok, detail
+end
+
+local function exec(args)
+  local ok, output = try_exec(args)
+  if not ok then
+    error(output)
+  end
+  return output
 end
 
 -- Extension ids are case-insensitive; `--list-extensions` prints the
@@ -103,31 +196,91 @@ function M.pin_satisfied(requested, observed)
   return observed ~= nil and strings.trim_space(tostring(requested)) == observed
 end
 
--- `code --install-extension` is a no-op on an already-installed extension
--- unless --force is passed, and --force also keeps it non-interactive, so it
--- is always on: install, re-pin and upgrade are then the same idempotent call.
-function M.install(pkg, opts)
-  opts = opts or {}
-  local target = pkg.name
+-- What `--install-extension` is handed: the id, or id@version when pinned.
+function M.target(pkg)
   if M.is_pinned(pkg.version) then
-    target = target .. "@" .. strings.trim_space(tostring(pkg.version))
+    return pkg.name .. "@" .. strings.trim_space(tostring(pkg.version))
   end
-  local args = "--install-extension " .. M.quote(target) .. " --force"
-  if opts.dry_run then
-    print("would run: " .. M.base_command() .. " " .. args)
-    return
-  end
-  exec(args)
+  return pkg.name
 end
 
-function M.uninstall(pkg, opts)
+local function install_args(packages)
+  local args = {}
+  for _, pkg in ipairs(packages) do
+    table.insert(args, "--install-extension " .. M.quote(M.target(pkg)))
+  end
+  -- `--install-extension` is a no-op on an already-installed extension unless
+  -- --force is passed, and --force also keeps it non-interactive, so it is
+  -- always on: install, re-pin and upgrade are then the same idempotent call.
+  table.insert(args, "--force")
+  return strings.join(args, " ")
+end
+
+local function uninstall_args(packages)
+  local args = {}
+  for _, pkg in ipairs(packages) do
+    table.insert(args, "--uninstall-extension " .. M.quote(pkg.name))
+  end
+  table.insert(args, "--force")
+  return strings.join(args, " ")
+end
+
+-- Run one action over a whole batch.
+--
+-- The CLI takes repeated flags, so a batch is one process start instead of one
+-- per extension. It stops at the first failure though, and never says which
+-- extension failed, so a failed batch is replayed one extension at a time:
+-- that isolates the bad one, lets every other extension through, and gives
+-- each its own retries. Whatever still fails is reported together at the end
+-- instead of aborting the run at the first bad extension.
+local function run_batch(packages, opts, build_args, verb)
   opts = opts or {}
-  local args = "--uninstall-extension " .. M.quote(pkg.name) .. " --force"
-  if opts.dry_run then
-    print("would run: " .. M.base_command() .. " " .. args)
+  if #packages == 0 then
     return
   end
-  exec(args)
+
+  if opts.dry_run then
+    print("would run: " .. M.base_command() .. " " .. build_args(packages))
+    return
+  end
+
+  if #packages > 1 then
+    local ok = try_exec_with_retries(build_args(packages))
+    if ok then
+      return
+    end
+    print("batch " .. verb .. " failed; falling back to one extension at a time")
+  end
+
+  local failures = {}
+  for _, pkg in ipairs(packages) do
+    local ok, detail = try_exec_with_retries(build_args({ pkg }))
+    if not ok then
+      table.insert(failures, M.target(pkg) .. " (" .. detail .. ")")
+      print("failed to " .. verb .. " " .. M.target(pkg) .. ": " .. detail)
+    end
+  end
+
+  if #failures > 0 then
+    error(
+      "failed to "
+        .. verb
+        .. " "
+        .. #failures
+        .. " of "
+        .. #packages
+        .. " extension(s): "
+        .. strings.join(failures, ", ")
+    )
+  end
+end
+
+function M.install(packages, opts)
+  run_batch(packages, opts, install_args, "install")
+end
+
+function M.uninstall(packages, opts)
+  run_batch(packages, opts, uninstall_args, "uninstall")
 end
 
 return M
